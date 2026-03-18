@@ -1,0 +1,139 @@
+---
+title: Plans
+description: API reference for creating and managing execution plans.
+icon: FileText
+---
+
+## `createPlan(definition)`
+
+Creates and validates a new execution plan.
+
+```typescript
+import { createPlan } from '@dee/engine';
+
+const plan = createPlan(definition: PlanDefinition): ExecutionPlan;
+```
+
+```typescript
+interface PlanDefinition {
+  id: string;
+  name: string;
+  steps: Step[];
+  transitions: TransitionSet;
+  exitConditions?: ExitCondition[];
+  metadata?: Record<string, unknown>;
+}
+```
+
+Throws `PlanValidationError` if the plan is invalid (unreachable steps, missing defaults, circular references).
+
+## Step Builders
+
+### `steps.sendEmail(config)`
+
+```typescript
+steps.sendEmail({
+  id: string;
+  templateId: string;
+  subject: string;
+  replyTo?: string;
+  tracking?: {
+    opens?: boolean;
+    clicks?: boolean;
+  };
+}): EmailStep;
+```
+
+### `steps.sendVoice(config)`
+
+```typescript
+steps.sendVoice({
+  id: string;
+  scriptId: string;
+  callerId?: string;
+  maxDuration?: Duration;
+  voicemail?: {
+    detect: boolean;
+    messageId?: string;
+    fallbackTTS?: string;
+  };
+}): VoiceStep;
+```
+
+### `steps.wait(config)`
+
+```typescript
+steps.wait({
+  id: string;
+  duration: Duration;
+}): WaitStep;
+```
+
+```typescript
+type Duration = {
+  days?: number;
+  hours?: number;
+  minutes?: number;
+};
+```
+
+### `steps.branch(config)`
+
+```typescript
+steps.branch({
+  id: string;
+  conditions: Array<{
+    when: string;  // condition expression
+    goto: string;  // target step ID
+  }>;
+}): BranchStep;
+```
+
+The last condition should use `when: 'default'` as a fallback.
+
+### `steps.end(config)`
+
+```typescript
+steps.end({
+  id: string;
+  outcome: string;
+}): EndStep;
+```
+
+## Transition Builders
+
+### `transitions.linear()`
+
+Creates transitions that connect steps in the order they're defined.
+
+```typescript
+transitions.linear(): TransitionSet;
+```
+
+### `transitions.explicit(edges)`
+
+Creates transitions from explicit edge definitions.
+
+```typescript
+transitions.explicit(edges: Array<{
+  from: string;
+  to: string;
+  condition?: string;
+}>): TransitionSet;
+```
+
+## Condition Expressions
+
+Branch conditions use a simple expression language:
+
+| Expression | Description |
+|-----------|-------------|
+| `events.hasReply("step-id")` | Contact replied to email from step |
+| `events.hasOpen("step-id")` | Contact opened email from step |
+| `events.hasClick("step-id")` | Contact clicked a link in email |
+| `events.hasBounce("step-id")` | Email from step bounced |
+| `events.hasReply(any)` | Contact replied to any email |
+| `contact.unsubscribed` | Contact is on suppression list |
+| `contact.bounced` | Contact email is invalid |
+| `call.outcome("step-id") == "answered"` | Call was answered |
+| `default` | Always true (fallback) |

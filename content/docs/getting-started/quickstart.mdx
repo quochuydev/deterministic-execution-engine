@@ -1,0 +1,104 @@
+---
+title: Quickstart
+description: Create and execute your first outbound communication plan.
+icon: Zap
+---
+
+## Define an Execution Plan
+
+An execution plan is a sequence of steps with transitions. Here's a simple email follow-up plan:
+
+```typescript
+import { createPlan, steps, transitions } from '@dee/engine';
+
+const plan = createPlan({
+  id: 'welcome-sequence',
+  name: 'Welcome Email Sequence',
+  steps: [
+    steps.sendEmail({
+      id: 'welcome-email',
+      templateId: 'tmpl_welcome',
+      subject: 'Welcome to {{company}}',
+    }),
+    steps.wait({
+      id: 'wait-3-days',
+      duration: { days: 3 },
+    }),
+    steps.branch({
+      id: 'check-engagement',
+      conditions: [
+        {
+          when: 'contact.emailOpened("welcome-email")',
+          goto: 'follow-up-engaged',
+        },
+        {
+          when: 'default',
+          goto: 'follow-up-cold',
+        },
+      ],
+    }),
+    steps.sendEmail({
+      id: 'follow-up-engaged',
+      templateId: 'tmpl_follow_up_warm',
+      subject: 'Quick question, {{firstName}}',
+    }),
+    steps.sendEmail({
+      id: 'follow-up-cold',
+      templateId: 'tmpl_follow_up_cold',
+      subject: 'Did you get a chance to look?',
+    }),
+  ],
+  transitions: transitions.linear(),
+});
+```
+
+## Execute the Plan
+
+Enroll a contact into the plan:
+
+```typescript
+import { Engine } from '@dee/engine';
+
+const engine = new Engine();
+
+const run = await engine.execute(plan, {
+  contact: {
+    id: 'contact_123',
+    email: 'jane@example.com',
+    firstName: 'Jane',
+    company: 'Acme Corp',
+  },
+});
+
+console.log(run.id);       // "run_abc123"
+console.log(run.status);   // "active"
+console.log(run.currentStep); // "welcome-email"
+```
+
+## Inspect the Execution Log
+
+Every action is recorded:
+
+```typescript
+const logs = await engine.getLogs(run.id);
+
+for (const entry of logs) {
+  console.log(`${entry.timestamp} | ${entry.step} | ${entry.action} | ${entry.outcome}`);
+}
+// 2025-01-15T10:00:00Z | welcome-email | send_email | delivered
+// 2025-01-18T10:00:00Z | wait-3-days   | wait       | completed
+// 2025-01-18T10:00:00Z | check-engagement | evaluate | branch:follow-up-cold
+// 2025-01-18T10:00:01Z | follow-up-cold | send_email | delivered
+```
+
+## Replay an Execution
+
+Replay the exact same run for debugging or auditing:
+
+```typescript
+const replay = await engine.replay(run.id);
+
+// Replays every step with the same inputs and timing
+// Outputs a diff if the result would differ from the original
+console.log(replay.identical); // true
+```

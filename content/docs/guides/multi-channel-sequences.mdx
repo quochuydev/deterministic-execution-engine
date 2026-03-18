@@ -1,0 +1,129 @@
+---
+title: Multi-Channel Sequences
+description: Building outreach sequences that coordinate email and voice touchpoints.
+icon: GitBranch
+---
+
+## Overview
+
+The most common use case for the DEE is a multi-channel outreach sequence: send an email, wait for engagement, follow up via call if no response. The engine coordinates these touchpoints deterministically.
+
+## Example: Sales Outreach Sequence
+
+```typescript
+const plan = createPlan({
+  id: 'sales-outreach-v2',
+  name: 'Sales Outreach Sequence',
+  steps: [
+    // Day 0: Initial email
+    steps.sendEmail({
+      id: 'initial-email',
+      templateId: 'tmpl_cold_intro',
+      subject: '{{product}} for {{contact.company}}',
+    }),
+
+    // Day 0 → Day 3: Wait for engagement
+    steps.wait({ id: 'wait-1', duration: { days: 3 } }),
+
+    // Day 3: Check if they engaged
+    steps.branch({
+      id: 'check-email-1',
+      conditions: [
+        { when: 'events.hasReply("initial-email")', goto: 'end-replied' },
+        { when: 'events.hasOpen("initial-email")', goto: 'warm-follow-up' },
+        { when: 'default', goto: 'cold-follow-up' },
+      ],
+    }),
+
+    // Warm path: they opened but didn't reply
+    steps.sendEmail({
+      id: 'warm-follow-up',
+      templateId: 'tmpl_warm_follow_up',
+      subject: 'Re: {{product}} for {{contact.company}}',
+    }),
+    steps.wait({ id: 'wait-2', duration: { days: 2 } }),
+    steps.branch({
+      id: 'check-email-2',
+      conditions: [
+        { when: 'events.hasReply("warm-follow-up")', goto: 'end-replied' },
+        { when: 'default', goto: 'call-attempt' },
+      ],
+    }),
+
+    // Cold path: no engagement at all
+    steps.sendEmail({
+      id: 'cold-follow-up',
+      templateId: 'tmpl_cold_follow_up',
+      subject: 'Trying to connect, {{contact.firstName}}',
+    }),
+    steps.wait({ id: 'wait-3', duration: { days: 4 } }),
+
+    // Day 7-9: Call attempt
+    steps.sendVoice({
+      id: 'call-attempt',
+      scriptId: 'script_intro_call',
+      voicemail: { detect: true, messageId: 'vm_intro' },
+    }),
+    steps.wait({ id: 'wait-4', duration: { days: 2 } }),
+
+    // Final email
+    steps.sendEmail({
+      id: 'breakup-email',
+      templateId: 'tmpl_breakup',
+      subject: 'Should I close your file?',
+    }),
+    steps.end({ id: 'end-no-reply', outcome: 'no_response' }),
+
+    // Success endpoint
+    steps.end({ id: 'end-replied', outcome: 'replied' }),
+  ],
+
+  transitions: transitions.explicit([
+    { from: 'initial-email', to: 'wait-1' },
+    { from: 'wait-1', to: 'check-email-1' },
+    // Warm path
+    { from: 'warm-follow-up', to: 'wait-2' },
+    { from: 'wait-2', to: 'check-email-2' },
+    // Cold path
+    { from: 'cold-follow-up', to: 'wait-3' },
+    { from: 'wait-3', to: 'call-attempt' },
+    // Converge to call
+    { from: 'call-attempt', to: 'wait-4' },
+    { from: 'wait-4', to: 'breakup-email' },
+    { from: 'breakup-email', to: 'end-no-reply' },
+  ]),
+});
+```
+
+## Execution Timeline
+
+For a contact who opens the initial email but never replies:
+
+```
+Day 0  │ initial-email    → delivered
+Day 3  │ check-email-1    → branch: warm-follow-up (opened)
+Day 3  │ warm-follow-up   → delivered
+Day 5  │ check-email-2    → branch: call-attempt (no reply)
+Day 5  │ call-attempt     → answered, no commitment
+Day 7  │ breakup-email    → delivered
+Day 7  │ end-no-reply     → completed (no_response)
+```
+
+Every step, branch decision, and outcome is recorded in the audit log with the exact logical tick it occurred.
+
+## Global Exit Conditions
+
+You can define conditions that immediately end the sequence regardless of current step:
+
+```typescript
+const plan = createPlan({
+  // ...steps and transitions...
+  exitConditions: [
+    { when: 'contact.unsubscribed', outcome: 'unsubscribed' },
+    { when: 'contact.bounced', outcome: 'undeliverable' },
+    { when: 'events.hasReply(any)', outcome: 'replied' },
+  ],
+});
+```
+
+Exit conditions are evaluated **before** each step executes. If matched, the run ends immediately and the exit outcome is recorded.

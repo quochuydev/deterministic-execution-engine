@@ -1,0 +1,114 @@
+---
+title: Voice Channel
+description: Deterministic outbound voice calls with voicemail detection and scripted flows.
+icon: Phone
+---
+
+## Overview
+
+The voice channel handles outbound calls as deterministic execution steps. Each call follows a scripted flow, with outcomes recorded in the audit log.
+
+## Configuration
+
+```typescript
+import { VoiceChannel } from '@dee/channels-voice';
+
+const voice = new VoiceChannel({
+  provider: 'twilio',
+  accountSid: process.env.TWILIO_ACCOUNT_SID,
+  authToken: process.env.TWILIO_AUTH_TOKEN,
+  defaultCallerId: process.env.TWILIO_FROM_NUMBER,
+  recording: {
+    enabled: true,
+    format: 'mp3',
+    storage: 's3://dee-recordings/',
+  },
+  voicemailDetection: {
+    enabled: true,
+    timeout: 5000, // ms to wait for human vs machine
+  },
+});
+```
+
+## Call Scripts
+
+Call scripts define the flow of a voice interaction:
+
+```typescript
+const script = createScript({
+  id: 'script_follow_up',
+  greeting: 'Hi {{contact.firstName}}, this is {{sender.name}} from {{sender.company}}.',
+  steps: [
+    {
+      type: 'speak',
+      text: 'I sent you an email about {{product}} — did you get a chance to look at it?',
+    },
+    {
+      type: 'gather',
+      input: 'speech',
+      timeout: 5,
+      hints: ['yes', 'no', 'not interested', 'tell me more'],
+    },
+    {
+      type: 'branch',
+      on: 'gather.result',
+      paths: {
+        interested: { next: 'book-meeting' },
+        not_interested: { next: 'thank-and-end' },
+        no_answer: { next: 'leave-voicemail' },
+      },
+    },
+  ],
+});
+```
+
+## Call Outcomes
+
+Every call produces a deterministic outcome:
+
+| Outcome | Description |
+|---------|-------------|
+| `answered` | Human picked up, script executed |
+| `voicemail` | Machine detected, voicemail left |
+| `no_answer` | No pickup after configured rings |
+| `busy` | Line busy |
+| `failed` | Call could not be placed (invalid number, carrier error) |
+| `declined` | Contact has opted out of calls |
+
+## Voicemail
+
+When voicemail is detected, the engine can leave a pre-recorded message:
+
+```typescript
+steps.sendVoice({
+  id: 'follow-up-call',
+  scriptId: 'script_follow_up',
+  voicemail: {
+    detect: true,
+    messageId: 'vm_follow_up', // pre-recorded audio
+    fallbackTTS: 'Hi {{contact.firstName}}, this is {{sender.name}}. Please call me back at {{sender.phone}}.',
+  },
+})
+```
+
+## Events
+
+| Event | Trigger |
+|-------|---------|
+| `call.initiated` | Call placed to carrier |
+| `call.ringing` | Phone ringing |
+| `call.answered` | Human picked up |
+| `call.voicemail` | Voicemail detected |
+| `call.completed` | Call ended normally |
+| `call.failed` | Call could not complete |
+| `call.recorded` | Recording uploaded to storage |
+
+## Compliance
+
+The voice channel enforces calling regulations:
+
+- **Time windows** — Calls only placed during permitted hours in the contact's time zone
+- **DNC lists** — Checked against Do Not Call registries before every dial
+- **Frequency caps** — Maximum call attempts per contact per time period
+- **Consent tracking** — Records consent status in the audit log
+- **Recording disclosure** — Configurable announcement for call recording compliance

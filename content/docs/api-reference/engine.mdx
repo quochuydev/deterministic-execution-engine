@@ -1,0 +1,130 @@
+---
+title: Engine
+description: Core Engine API reference.
+icon: Cpu
+---
+
+## `Engine`
+
+The main entry point for the Deterministic Execution Engine.
+
+### Constructor
+
+```typescript
+const engine = new Engine(config: EngineConfig);
+```
+
+```typescript
+interface EngineConfig {
+  database: string;               // PostgreSQL connection string
+  redis: string;                  // Redis connection string
+  scheduler?: {
+    tickInterval?: number;        // ms between ticks (default: 1000)
+    maxRunsPerTick?: number;      // max runs per tick (default: 500)
+    partitionKey?: string;        // for multi-instance deployments
+  };
+  channels?: {
+    email?: EmailChannelConfig;
+    voice?: VoiceChannelConfig;
+  };
+  audit?: {
+    retention?: { days: number }; // log retention (default: indefinite)
+    archiveTo?: string;           // S3 URI for archived logs
+  };
+}
+```
+
+### `engine.execute(plan, params)`
+
+Starts a new execution run for a contact.
+
+```typescript
+const run = await engine.execute(plan: ExecutionPlan, params: {
+  contact: Contact;
+  variables?: Record<string, unknown>;
+  startAt?: number;  // tick to start at (default: current tick)
+}): Promise<ExecutionRun>;
+```
+
+### `engine.getRun(runId)`
+
+Retrieves the current state of an execution run.
+
+```typescript
+const run = await engine.getRun(runId: string): Promise<ExecutionRun>;
+```
+
+### `engine.pauseRun(runId)`
+
+Pauses an active run. The run can be resumed later.
+
+```typescript
+await engine.pauseRun(runId: string): Promise<void>;
+```
+
+### `engine.resumeRun(runId)`
+
+Resumes a paused run.
+
+```typescript
+await engine.resumeRun(runId: string): Promise<void>;
+```
+
+### `engine.cancelRun(runId, reason)`
+
+Cancels a run permanently. Cannot be undone.
+
+```typescript
+await engine.cancelRun(runId: string, reason: string): Promise<void>;
+```
+
+### `engine.replay(runId, options)`
+
+Replays a completed run to verify determinism.
+
+```typescript
+const result = await engine.replay(runId: string, options?: {
+  dryRun?: boolean;  // default: true
+}): Promise<ReplayResult>;
+```
+
+```typescript
+interface ReplayResult {
+  identical: boolean;
+  steps: Array<{
+    id: string;
+    originalResult: StepResult;
+    replayedResult: StepResult;
+    identical: boolean;
+  }>;
+  diffs: Array<{
+    step: string;
+    field: string;
+    expected: unknown;
+    actual: unknown;
+  }>;
+}
+```
+
+### `engine.getTimeline(runId)`
+
+Returns an ordered timeline of all events in a run.
+
+```typescript
+const timeline = await engine.getTimeline(runId: string): Promise<TimelineEntry[]>;
+```
+
+### `engine.ingestEvent(event)`
+
+Feeds an external event (email open, reply, call outcome) into the engine.
+
+```typescript
+await engine.ingestEvent(event: {
+  type: string;          // 'email.opened', 'email.replied', etc.
+  contactId: string;
+  runId?: string;        // optional: associate with specific run
+  stepId?: string;       // optional: associate with specific step
+  data: Record<string, unknown>;
+  occurredAt: Date;
+}): Promise<void>;
+```

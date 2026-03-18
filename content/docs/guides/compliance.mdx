@@ -1,0 +1,114 @@
+---
+title: Compliance
+description: How the DEE supports regulatory compliance for outbound communication.
+icon: Scale
+---
+
+## Overview
+
+Outbound communication is heavily regulated. The DEE is designed to make compliance provable — not just "we think we're compliant" but "here is the cryptographically verifiable audit trail proving it."
+
+## Regulations
+
+The engine helps with compliance for:
+
+| Regulation | Scope | Key Requirements |
+|-----------|-------|-----------------|
+| **CAN-SPAM** | US email | Unsubscribe mechanism, physical address, no deception |
+| **GDPR** | EU all channels | Consent, right to erasure, data processing records |
+| **TCPA** | US voice/SMS | Prior express consent, time-of-day restrictions, DNC |
+| **CASL** | Canada email | Express/implied consent, identification, unsubscribe |
+| **PECR** | UK email/voice | Consent, opt-out, caller ID display |
+
+## Consent Management
+
+The engine tracks consent status per contact per channel:
+
+```typescript
+interface ConsentRecord {
+  contactId: string;
+  channel: 'email' | 'voice';
+  status: 'granted' | 'revoked' | 'expired';
+  type: 'express' | 'implied';
+  grantedAt: Date;
+  expiresAt?: Date;
+  source: string;        // where consent was obtained
+  evidence: string;       // link to consent proof
+}
+```
+
+Before every channel action, the engine checks consent:
+
+```
+1. Check consent status for contact + channel
+   ├── GRANTED → Proceed with action
+   ├── REVOKED → Skip step, log as "skipped:no_consent"
+   ├── EXPIRED → Skip step, log as "skipped:consent_expired"
+   └── MISSING → Skip step, log as "skipped:no_consent_record"
+```
+
+Consent checks are recorded in the audit log — you can prove that every send was authorized.
+
+## Time-of-Day Restrictions
+
+Voice calls are restricted to permitted hours based on the contact's time zone:
+
+```typescript
+const voice = new VoiceChannel({
+  callingHours: {
+    start: '08:00',  // local time
+    end: '21:00',    // local time
+    timezone: 'contact', // use contact's timezone
+    daysOfWeek: [1, 2, 3, 4, 5], // Mon-Fri only
+  },
+});
+```
+
+If a call step is reached outside permitted hours, the engine **pauses** the run and resumes at the next permitted window. This is recorded in the audit log:
+
+```
+[tick 432000] call-attempt: paused (outside_calling_hours, next_window: 2025-01-20T08:00:00-05:00)
+[tick 471600] call-attempt: resumed (within_calling_hours)
+[tick 471601] call-attempt: send_voice → answered
+```
+
+## Suppression Lists
+
+The engine maintains suppression lists at multiple levels:
+
+- **Global** — Contacts who have unsubscribed from all communication
+- **Channel** — Contacts who opted out of a specific channel (email only, no calls)
+- **Plan** — Contacts who opted out of a specific sequence
+- **Regulatory** — DNC registry entries, GDPR erasure requests
+
+```typescript
+await engine.suppress({
+  contactId: 'contact_123',
+  level: 'global',
+  reason: 'unsubscribe',
+  source: 'email_link',
+});
+```
+
+## Audit Reports
+
+Generate compliance reports for specific time periods:
+
+```typescript
+const report = await engine.compliance.report({
+  period: { from: '2025-01-01', to: '2025-03-31' },
+  include: [
+    'total_sends_by_channel',
+    'consent_status_at_time_of_send',
+    'suppression_events',
+    'calling_hours_compliance',
+    'unsubscribe_processing_time',
+  ],
+});
+```
+
+Reports include:
+- Proof that every send had valid consent at time of execution
+- Time-of-day compliance for all voice calls
+- Unsubscribe request processing times (must be < 10 business days for CAN-SPAM)
+- Complete hash chain verification for audit log integrity

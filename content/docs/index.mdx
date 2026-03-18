@@ -1,0 +1,33 @@
+---
+title: Deterministic Execution Engine
+description: A strict, auditable execution engine for outbound communication - email and voice.
+icon: BookOpen
+---
+
+The Deterministic Execution Engine (DEE) is a system that ensures outbound communication — email and voice — executes in a **predictable, reproducible, and fully auditable** manner.
+
+Given the same inputs and execution plan, the engine always produces the same sequence of actions, in the same order, with the same timing. No race conditions. No silent failures. Every decision is logged and traceable.
+
+## System Guarantees
+
+The DEE enforces six non-negotiable guarantees:
+
+| # | Guarantee | Description |
+|---|-----------|-------------|
+| 1 | **Deterministic Behavior** | Same inputs always produce the same outputs. Same plan + same contact + same events = identical execution, every time. |
+| 2 | **Full Auditability** | Every action is reconstructable. Every step, decision, branch, and channel interaction is recorded in an immutable, hash-chained log. |
+| 3 | **Replayability** | Any execution can be reproduced offline. Given the execution log, you can replay the entire run and verify it produces identical results. |
+| 4 | **Fail-Closed Safety** | No silent failures. No hidden fallbacks. If something fails, the engine stops, records the failure, and surfaces it. Nothing proceeds without explicit resolution. |
+| 5 | **Vendor Independence** | No execution logic is tied to a specific email or voice provider. Channels are pluggable adapters; switching providers changes zero business logic. |
+| 6 | **Strict Cost & Policy Enforcement** | Budgets, rate limits, sending windows, and compliance rules are enforced at the engine level. No step can bypass policy, even under retry or error conditions. |
+
+These are not features — they are **invariants**. If any guarantee is violated, the engine is broken.
+
+## Quick Links
+
+<Cards>
+  <Card title="Overview" href="/docs/getting-started/overview" />
+  <Card title="Execution Model" href="/docs/core-concepts/execution-model" />
+  <Card title="Email Channel" href="/docs/channels/email" />
+  <Card title="Voice Channel" href="/docs/channels/voice" />
+</Cards>

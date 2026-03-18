@@ -1,0 +1,143 @@
+---
+title: Execution Model
+description: How the engine processes outbound communication as deterministic state transitions.
+icon: Workflow
+---
+
+## Overview
+
+The DEE models every outbound communication workflow as a **finite state machine**. Each contact enrolled in a plan progresses through a series of states — and every transition between states is deterministic, recorded, and replayable.
+
+## States
+
+An execution run is always in exactly one of these states:
+
+```
+┌──────────┐
+│ PENDING  │ ── Plan created, not yet started
+└────┬─────┘
+     │
+┌────▼─────┐
+│ ACTIVE   │ ── Executing steps in order
+└────┬─────┘
+     │
+     ├──────────────┐
+     │              │
+┌────▼─────┐  ┌────▼──────┐
+│ PAUSED   │  │ WAITING   │ ── Delay step (wait 3 days)
+└────┬─────┘  └────┬──────┘
+     │              │
+     └──────┬───────┘
+            │
+     ┌──────▼──────┐
+     │  COMPLETED  │ ── All steps finished
+     └─────────────┘
+            │
+     ┌──────▼──────┐
+     │   FAILED    │ ── Unrecoverable error
+     └─────────────┘
+```
+
+## Transition Rules
+
+State transitions follow strict rules:
+
+| From | To | Trigger |
+|------|----|---------|
+| `PENDING` | `ACTIVE` | `engine.execute()` called |
+| `ACTIVE` | `WAITING` | Current step is a `wait` step |
+| `ACTIVE` | `PAUSED` | Manual pause or rate limit hit |
+| `ACTIVE` | `COMPLETED` | Final step executed successfully |
+| `ACTIVE` | `FAILED` | Unrecoverable error after retries exhausted |
+| `WAITING` | `ACTIVE` | Wait duration elapsed |
+| `PAUSED` | `ACTIVE` | Manual resume |
+
+**Invalid transitions are rejected.** The engine will never silently skip a state or allow out-of-order execution.
+
+## Execution Context
+
+Every step executes within an **execution context** — a snapshot of all state available to the step:
+
+```typescript
+interface ExecutionContext {
+  run: {
+    id: string;
+    planId: string;
+    currentStep: string;
+    startedAt: Date;
+    stepResults: Record<string, StepResult>;
+  };
+  contact: {
+    id: string;
+    email: string;
+    phone?: string;
+    attributes: Record<string, unknown>;
+  };
+  events: ChannelEvent[];  // opens, replies, bounces, call outcomes
+  clock: LogicalClock;     // deterministic time reference
+}
+```
+
+The context is **immutable within a step**. A step reads from the context, performs its action, and produces a `StepResult`. The engine then updates the context for the next step.
+
+## Determinism Guarantees
+
+The execution model enforces the engine's six guarantees through specific mechanisms:
+
+### Deterministic Behavior
+
+Three mechanisms eliminate non-determinism:
+
+1. **Logical clock** — All time-based decisions use a logical clock, not wall time. The logical clock advances in fixed increments per scheduler tick. A "wait 3 days" step always resolves after the same number of ticks, regardless of system load or clock drift.
+
+2. **Snapshot evaluation** — Branch conditions are evaluated against a point-in-time snapshot of the execution context. External events (email opens, replies) are only visible if they arrived before the snapshot was taken.
+
+3. **Ordered event ingestion** — External events are ingested through a single ordered queue. The engine processes events in sequence, never concurrently, ensuring consistent state regardless of arrival timing.
+
+### Fail-Closed Safety
+
+The state machine enforces fail-closed behavior:
+
+- There is no implicit `ACTIVE → ACTIVE` transition on error. A failed step transitions the run to `FAILED`.
+- There is no `SKIPPED` state. A step either executes or the run stops.
+- There is no automatic fallback. If a channel adapter returns an error, the step fails — it does not try a different adapter or template.
+
+```
+step fails → run.status = FAILED → execution halts
+                                   ↳ requires explicit resolution to continue
+```
+
+### Vendor Independence
+
+The execution context never contains provider-specific data. Channel interactions go through a strict interface:
+
+```typescript
+interface ChannelAdapter {
+  send(action: ChannelAction, context: ExecutionContext): Promise<ChannelResult>;
+}
+
+// ChannelResult is provider-agnostic
+interface ChannelResult {
+  status: 'delivered' | 'failed' | 'pending';
+  messageId: string;      // engine-assigned, not provider-assigned
+  metadata: Record<string, unknown>;
+}
+```
+
+Plans, execution logs, and replay results contain zero provider-specific identifiers. A run replayed against a different provider produces the same execution trace.
+
+### Cost & Policy Enforcement
+
+Before every step execution, the engine evaluates a **policy gate**:
+
+```typescript
+interface PolicyGate {
+  evaluate(step: Step, context: ExecutionContext): PolicyResult;
+}
+
+type PolicyResult =
+  | { allowed: true }
+  | { allowed: false; reason: string; action: 'pause' | 'fail' | 'skip_with_log' };
+```
+
+Policy evaluation is deterministic — it reads from the same execution context snapshot as the step itself. A policy violation is recorded in the audit log with the same fidelity as a step execution.

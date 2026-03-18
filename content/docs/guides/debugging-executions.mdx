@@ -1,0 +1,112 @@
+---
+title: Debugging Executions
+description: How to inspect, replay, and debug execution runs.
+icon: Bug
+---
+
+## Inspecting a Run
+
+Every run exposes its full state:
+
+```typescript
+const run = await engine.getRun('run_abc123');
+
+console.log({
+  status: run.status,           // 'active' | 'completed' | 'failed' | ...
+  currentStep: run.currentStep, // 'wait-1'
+  stepsCompleted: run.stepsCompleted, // 3
+  stepsRemaining: run.stepsRemaining, // 4
+  startedAt: run.startedAt,
+  startTick: run.startTick,
+  currentTick: run.currentTick,
+});
+```
+
+## Execution Timeline
+
+Get a visual timeline of everything that happened:
+
+```typescript
+const timeline = await engine.getTimeline('run_abc123');
+
+for (const event of timeline) {
+  console.log(`[tick ${event.tick}] ${event.step}: ${event.action} → ${event.outcome}`);
+}
+```
+
+```
+[tick 0]    initial-email   : send_email → delivered
+[tick 259200] wait-1        : wait       → completed
+[tick 259200] check-email-1 : evaluate   → branch:warm-follow-up
+[tick 259201] warm-follow-up: send_email → delivered
+[tick 432000] wait-2        : wait       → completed
+[tick 432000] check-email-2 : evaluate   → branch:call-attempt
+[tick 432001] call-attempt  : send_voice → answered
+```
+
+## Replay
+
+Replay an execution to verify it would produce the same results:
+
+```typescript
+const replay = await engine.replay('run_abc123', { dryRun: true });
+
+if (replay.identical) {
+  console.log('Execution is reproducible');
+} else {
+  for (const diff of replay.diffs) {
+    console.log(`Step ${diff.step}: expected ${diff.expected}, got ${diff.actual}`);
+  }
+}
+```
+
+Common reasons for replay divergence:
+- Plan was modified after the run started (plans should be immutable)
+- External event ordering changed (events arrived in different order)
+- Template content was updated between original run and replay
+
+## Step-by-Step Debugging
+
+Advance a run one step at a time:
+
+```typescript
+const debugRun = await engine.debug('run_abc123');
+
+while (debugRun.hasNext()) {
+  const step = debugRun.peek(); // see next step without executing
+  console.log(`Next: ${step.id} (${step.type})`);
+  console.log(`Context:`, step.context);
+
+  const result = await debugRun.stepForward();
+  console.log(`Result:`, result);
+}
+```
+
+## Common Issues
+
+### Run stuck in WAITING state
+Check if the logical clock has advanced past the target tick:
+```typescript
+const run = await engine.getRun('run_abc123');
+const waitStep = run.steps.find(s => s.id === run.currentStep);
+console.log(`Current tick: ${run.currentTick}, target: ${waitStep.targetTick}`);
+```
+
+### Unexpected branch taken
+Inspect the execution context at the time of the branch:
+```typescript
+const snapshot = await engine.audit.getContextAt('run_abc123', 'check-email-1');
+console.log('Events available at branch:', snapshot.events);
+```
+
+### Duplicate sends suspected
+Verify idempotency key usage:
+```typescript
+const sends = await engine.audit.query({
+  runId: 'run_abc123',
+  actions: ['step.executed'],
+});
+for (const send of sends) {
+  console.log(`${send.stepId}: key=${send.output.idempotencyKey}, provider_id=${send.output.providerId}`);
+}
+```

@@ -1,0 +1,139 @@
+---
+title: Execution Plans
+description: Defining structured outbound communication workflows as execution plans.
+icon: Map
+---
+
+## What is an Execution Plan?
+
+An execution plan is the blueprint for an outbound communication workflow. It defines:
+
+- **Steps** — The actions to perform (send email, make call, wait, branch)
+- **Transitions** — How steps connect to each other
+- **Conditions** — Rules that control branching logic
+- **Timing** — Delays and scheduling constraints
+
+Plans are **immutable once created**. If you need to change a plan, you create a new version. Active runs continue on the version they started with.
+
+## Plan Structure
+
+```typescript
+interface ExecutionPlan {
+  id: string;
+  version: number;
+  name: string;
+  steps: Step[];
+  transitions: Transition[];
+  metadata: {
+    createdAt: Date;
+    createdBy: string;
+    description?: string;
+  };
+}
+```
+
+## Step Types
+
+### Send Email
+
+Sends an email to the contact using a template.
+
+```typescript
+steps.sendEmail({
+  id: 'intro-email',
+  templateId: 'tmpl_intro',
+  subject: 'Introducing {{product}}',
+  replyTo: 'sales@example.com',
+  tracking: {
+    opens: true,
+    clicks: true,
+  },
+})
+```
+
+### Send Voice
+
+Initiates an outbound voice call.
+
+```typescript
+steps.sendVoice({
+  id: 'follow-up-call',
+  scriptId: 'script_follow_up',
+  callerId: '+15551234567',
+  maxDuration: { minutes: 5 },
+  voicemail: {
+    detect: true,
+    messageId: 'vm_follow_up',
+  },
+})
+```
+
+### Wait
+
+Pauses execution for a specified duration.
+
+```typescript
+steps.wait({
+  id: 'wait-for-reply',
+  duration: { days: 3, hours: 12 },
+})
+```
+
+### Branch
+
+Evaluates conditions and routes to different steps.
+
+```typescript
+steps.branch({
+  id: 'check-response',
+  conditions: [
+    { when: 'events.hasReply("intro-email")', goto: 'end-sequence' },
+    { when: 'events.hasOpen("intro-email")', goto: 'warm-follow-up' },
+    { when: 'default', goto: 'cold-follow-up' },
+  ],
+})
+```
+
+### End
+
+Marks the execution as complete.
+
+```typescript
+steps.end({
+  id: 'end-sequence',
+  outcome: 'replied',
+})
+```
+
+## Transitions
+
+Transitions define the edges in the execution graph. The simplest form is linear:
+
+```typescript
+// Each step flows to the next in order
+transitions.linear()
+```
+
+For complex flows, define explicit transitions:
+
+```typescript
+transitions.explicit([
+  { from: 'intro-email', to: 'wait-for-reply' },
+  { from: 'wait-for-reply', to: 'check-response' },
+  { from: 'check-response', to: 'warm-follow-up', condition: 'opened' },
+  { from: 'check-response', to: 'cold-follow-up', condition: 'default' },
+  { from: 'warm-follow-up', to: 'end-sequence' },
+  { from: 'cold-follow-up', to: 'follow-up-call' },
+  { from: 'follow-up-call', to: 'end-sequence' },
+])
+```
+
+## Validation
+
+Plans are validated at creation time. The engine rejects plans that:
+
+- Have unreachable steps
+- Contain circular transitions without a termination condition
+- Reference missing templates or scripts
+- Have branch steps without a `default` condition
+- Exceed maximum step count limits

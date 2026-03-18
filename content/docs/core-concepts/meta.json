@@ -1,0 +1,5 @@
+{
+  "title": "Core Concepts",
+  "icon": "Server",
+  "pages": ["execution-model", "execution-plans", "scheduler", "audit-log", "idempotency"]
+}

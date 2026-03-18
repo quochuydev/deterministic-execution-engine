@@ -1,0 +1,100 @@
+---
+title: Scheduler
+description: The deterministic scheduler that drives plan execution.
+icon: Clock
+---
+
+## Overview
+
+The scheduler is the core loop of the DEE. It processes execution runs in a deterministic, tick-based cycle — evaluating which runs need attention and advancing them one step at a time.
+
+## Tick-Based Execution
+
+Unlike event-driven systems that react to triggers in real time, the DEE scheduler operates on **fixed ticks**. Each tick:
+
+1. Queries for runs that are ready to advance (wait elapsed, new events available)
+2. Sorts runs by a deterministic ordering key (run ID)
+3. Processes each run in order: evaluates the current step, executes the action, records the result
+4. Advances the logical clock
+
+```
+Tick 1: Process runs [run_001, run_003, run_007]
+Tick 2: Process runs [run_002, run_007]
+Tick 3: Process runs [run_001, run_004]
+...
+```
+
+This tick-based model means the same set of runs, with the same events, always processes in the same order — regardless of system load, timing, or concurrency.
+
+## Logical Clock
+
+The scheduler maintains a **logical clock** that serves as the single source of truth for time-based decisions:
+
+```typescript
+interface LogicalClock {
+  tick: number;          // monotonically increasing tick counter
+  resolution: number;    // milliseconds per tick (default: 1000)
+  epoch: Date;           // wall-clock time of tick 0
+}
+```
+
+When a step says "wait 3 days", the engine computes:
+
+```
+targetTick = currentTick + (3 * 24 * 60 * 60 * 1000) / resolution
+```
+
+The run resumes when `clock.tick >= targetTick`. This makes wait durations **deterministic** — they always resolve after the same number of ticks, not after an unpredictable wall-clock interval.
+
+## Concurrency Model
+
+The scheduler uses a **single-writer, multiple-reader** model:
+
+- **One scheduler instance** processes runs (the writer)
+- **Multiple API instances** can read execution state and enqueue events (readers)
+- A **distributed lock** (Redis-based) ensures only one scheduler is active at a time
+
+This eliminates race conditions entirely. There is no concurrent mutation of execution state.
+
+### Distributed Lock
+
+```typescript
+const lock = await redis.acquireLock('dee:scheduler:lock', {
+  ttl: 30_000,        // lock expires after 30s
+  retryDelay: 1_000,  // retry every 1s if lock is held
+});
+
+if (lock.acquired) {
+  await scheduler.tick();
+  await lock.release();
+}
+```
+
+## Scaling
+
+The single-writer model might seem like a bottleneck, but in practice:
+
+- Each tick processes hundreds of runs in milliseconds
+- The bottleneck is channel I/O (sending emails, making calls), not scheduling
+- Channel actions are dispatched asynchronously; the scheduler doesn't wait for delivery
+
+For high-volume deployments, runs can be **partitioned** across multiple scheduler instances, each owning a subset of runs:
+
+```
+Scheduler A: runs where hash(run_id) % 3 == 0
+Scheduler B: runs where hash(run_id) % 3 == 1
+Scheduler C: runs where hash(run_id) % 3 == 2
+```
+
+Each partition is independently deterministic.
+
+## Configuration
+
+```typescript
+const scheduler = new Scheduler({
+  tickInterval: 1000,          // ms between ticks
+  maxRunsPerTick: 500,         // cap per tick to bound latency
+  lockTTL: 30_000,             // distributed lock TTL
+  partitionKey: 'scheduler-0', // for multi-instance deployments
+});
+```

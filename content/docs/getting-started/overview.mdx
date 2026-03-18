@@ -1,0 +1,129 @@
+---
+title: Overview
+description: What the Deterministic Execution Engine is and the problems it solves.
+icon: Map
+---
+
+## The Problem
+
+Outbound communication systems — the kind that send emails, make calls, and follow up with contacts — are complex. They involve:
+
+- Scheduling messages across time zones
+- Branching logic based on recipient behavior (opened, replied, bounced)
+- Retry and backoff strategies for transient failures
+- Multi-channel coordination (email first, then call if no reply)
+
+Most systems handle this with background job queues, cron jobs, and ad-hoc retry logic. The result is **non-deterministic execution**: runs behave differently depending on timing, system load, and external service responses. When something goes wrong, there's no reliable way to trace what happened or reproduce the issue.
+
+## The Solution
+
+The Deterministic Execution Engine (DEE) models every outbound communication workflow as an **execution plan** — a directed graph of steps with explicit transitions, conditions, and timing constraints.
+
+The engine enforces **six guarantees** that together make the system strict, auditable, and safe.
+
+### 1. Deterministic Behavior
+
+Same inputs always produce the same outputs.
+
+The scheduler uses a logical clock, not wall time. Branch conditions evaluate against immutable state snapshots. External events are ingested in a single ordered queue. There is no concurrency, no race condition, and no source of non-determinism inside the engine.
+
+```
+f(plan, contact, events) → identical execution trace, every time
+```
+
+### 2. Full Auditability
+
+Every action is reconstructable.
+
+Every step transition, branch evaluation, channel send, and error is recorded in an append-only, hash-chained audit log. Each entry references the previous entry's hash, making the log tamper-evident. Given the log, you can reconstruct exactly what happened, when, and why.
+
+```
+[tick 0]     step:welcome-email  → action:send_email → outcome:delivered   hash:a3f2...
+[tick 259200] step:wait-3-days   → action:wait       → outcome:completed  hash:7b1c...
+[tick 259200] step:check-open    → action:evaluate   → outcome:branch:no  hash:e9d4...
+```
+
+### 3. Replayability
+
+Any execution can be reproduced offline.
+
+Given the execution plan, initial inputs, and the event log, the engine can replay the entire run in an isolated environment. The replay produces an execution trace that is compared against the original. If they diverge, the engine reports exactly where and why.
+
+This enables:
+- **Debugging** — reproduce a failed run without accessing production
+- **Auditing** — prove to regulators that execution matched the plan
+- **Testing** — verify plan changes against historical runs
+
+### 4. Fail-Closed Safety
+
+No silent failures. No hidden fallbacks.
+
+If a step fails, the engine does not quietly retry, skip, or substitute a fallback. It records the failure, transitions the run to a `FAILED` state, and stops. Execution only resumes after explicit intervention — either a manual retry or a policy-defined recovery action.
+
+This means:
+- A failed email send never silently falls back to a different template
+- A timed-out API call never silently skips the step
+- A rate limit never silently delays and re-executes without recording the delay
+
+```
+[tick 100] step:send-email → action:send_email → outcome:FAILED(smtp_timeout)
+[tick 100] run:run_abc123 → status:FAILED → reason:step_failed(send-email)
+           ↳ requires: manual retry or policy resolution
+```
+
+### 5. Vendor Independence
+
+No execution logic is tied to a specific provider.
+
+Email and voice providers are pluggable **channel adapters**. The execution plan defines *what* to do ("send an email with template X"), not *how* to do it ("call the SendGrid API with these headers"). Switching from SendGrid to Postmark, or from Twilio to Vonage, changes only the adapter — zero changes to plans, logic, or scheduling.
+
+```
+Execution Plan → Scheduler → Channel Interface → Adapter → Provider
+                                  ↑
+                          This boundary is strict.
+                   No provider details leak above it.
+```
+
+### 6. Strict Cost & Policy Enforcement
+
+Budgets, rate limits, and compliance rules are enforced at the engine level.
+
+Every step passes through a **policy gate** before execution. Policies are evaluated deterministically — they cannot be bypassed by retries, race conditions, or bulk operations.
+
+| Policy | Enforcement |
+|--------|-------------|
+| Daily send limit | Counter checked before every send, atomically incremented |
+| Cost budget | Estimated cost computed before execution, rejected if over budget |
+| Calling hours | Contact timezone resolved, step paused if outside window |
+| Consent check | Consent status verified per contact per channel before every action |
+| Suppression list | Global/channel/plan suppression checked before every action |
+
+## How It Works
+
+```
+Execution Plan          Scheduler             Policy Gate           Channels
++-----------+       +-------------+       +-------------+       +-----------+
+| Step 1:   | ----> | Evaluate    | ----> | Check       | ----> | Send      |
+| Send Email|       | conditions  |       | policies    |       | via SMTP  |
++-----------+       +-------------+       +-------------+       +-----------+
+      |                    |                     |
+      v                    v                     v
++-----------+       +-------------+       +-------------+
+| Step 2:   |       | Record      |       | Enforce     |
+| Wait 3d   |       | transition  |       | limits      |
++-----------+       +-------------+       +-------------+
+      |                    |
+      v                    v
++-----------+       +-------------+       +-------------+       +-----------+
+| Step 3:   | ----> | Evaluate    | ----> | Check       | ----> | Initiate  |
+| Call if   |       | open status |       | calling hrs |       | via VoIP  |
+| no reply  |       +-------------+       +-------------+       +-----------+
++-----------+
+```
+
+## Use Cases
+
+- **Sales outreach** — Multi-step sequences with email and call touchpoints
+- **Collections** — Escalating contact attempts with strict compliance rules
+- **Notifications** — Guaranteed delivery with verifiable audit trails
+- **Regulatory comms** — Provably correct execution for compliance reporting

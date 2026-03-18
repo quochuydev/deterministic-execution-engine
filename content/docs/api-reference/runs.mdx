@@ -1,0 +1,136 @@
+---
+title: Runs
+description: API reference for execution runs and their lifecycle.
+icon: Play
+---
+
+## `ExecutionRun`
+
+Represents a single execution of a plan for a contact.
+
+```typescript
+interface ExecutionRun {
+  id: string;
+  planId: string;
+  planVersion: number;
+  contactId: string;
+  status: RunStatus;
+  currentStep: string | null;
+  stepsCompleted: number;
+  stepsRemaining: number;
+  startTick: number;
+  currentTick: number;
+  startedAt: Date;
+  completedAt: Date | null;
+  outcome: string | null;
+  variables: Record<string, unknown>;
+}
+
+type RunStatus =
+  | 'pending'
+  | 'active'
+  | 'waiting'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+```
+
+## Listing Runs
+
+### `engine.listRuns(filters)`
+
+```typescript
+const runs = await engine.listRuns(filters?: {
+  status?: RunStatus | RunStatus[];
+  planId?: string;
+  contactId?: string;
+  startedAfter?: Date;
+  startedBefore?: Date;
+  limit?: number;
+  offset?: number;
+}): Promise<{ runs: ExecutionRun[]; total: number }>;
+```
+
+### Examples
+
+```typescript
+// All active runs
+const active = await engine.listRuns({ status: 'active' });
+
+// Runs for a specific contact
+const contactRuns = await engine.listRuns({ contactId: 'contact_123' });
+
+// Failed runs in the last 24 hours
+const failed = await engine.listRuns({
+  status: 'failed',
+  startedAfter: new Date(Date.now() - 86400000),
+});
+```
+
+## Run Lifecycle
+
+### Starting a Run
+
+```typescript
+const run = await engine.execute(plan, {
+  contact: { id: 'contact_123', email: 'jane@example.com' },
+});
+// run.status === 'active'
+```
+
+### Pausing and Resuming
+
+```typescript
+await engine.pauseRun(run.id);
+// run.status === 'paused'
+
+await engine.resumeRun(run.id);
+// run.status === 'active'
+```
+
+### Cancelling
+
+```typescript
+await engine.cancelRun(run.id, 'Contact requested removal');
+// run.status === 'cancelled'
+// Recorded in audit log with reason
+```
+
+### Completion
+
+Runs complete automatically when they reach an `end` step:
+
+```typescript
+// After final step executes:
+// run.status === 'completed'
+// run.outcome === 'replied' (from the end step definition)
+```
+
+## Bulk Operations
+
+### `engine.bulkExecute(plan, contacts)`
+
+Enroll multiple contacts into a plan:
+
+```typescript
+const results = await engine.bulkExecute(plan, {
+  contacts: Contact[],
+  variables?: Record<string, unknown>,  // shared variables
+  batchSize?: number,                   // default: 100
+});
+
+// results: { created: 950, skipped: 50, errors: 0 }
+// Skipped = already enrolled or suppressed
+```
+
+### `engine.bulkCancel(filters, reason)`
+
+Cancel runs matching filters:
+
+```typescript
+await engine.bulkCancel(
+  { planId: 'old-plan', status: 'active' },
+  'Plan deprecated'
+);
+```

@@ -1,0 +1,5 @@
+{
+  "title": "Guides",
+  "icon": "BookOpen",
+  "pages": ["multi-channel-sequences", "debugging-executions", "compliance"]
+}

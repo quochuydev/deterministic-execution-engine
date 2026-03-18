@@ -1,0 +1,98 @@
+---
+title: Email Channel
+description: Sending deterministic, trackable outbound emails through the execution engine.
+icon: Mail
+---
+
+## Overview
+
+The email channel handles outbound email delivery as a deterministic step in an execution plan. Every email sent is tracked, logged, and idempotent.
+
+## Configuration
+
+```typescript
+import { EmailChannel } from '@dee/channels-email';
+
+const email = new EmailChannel({
+  provider: 'smtp',
+  host: process.env.SMTP_HOST,
+  port: 587,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+  defaults: {
+    from: 'outreach@example.com',
+    replyTo: 'team@example.com',
+  },
+  tracking: {
+    opens: true,    // pixel tracking
+    clicks: true,   // link wrapping
+    domain: 'track.example.com',
+  },
+});
+```
+
+## Templates
+
+Email templates use Handlebars syntax with access to the execution context:
+
+```handlebars
+Subject: {{subject}}
+
+Hi {{contact.firstName}},
+
+{{#if previousStep.result.opened}}
+I noticed you opened my previous email — wanted to follow up.
+{{else}}
+I wanted to make sure my last message didn't get buried.
+{{/if}}
+
+Best,
+{{sender.name}}
+```
+
+Available template variables:
+
+| Variable | Description |
+|----------|-------------|
+| `contact.*` | Contact attributes (email, firstName, company, etc.) |
+| `sender.*` | Sender information |
+| `previousStep.*` | Result of the previous step |
+| `run.*` | Current execution run metadata |
+| `unsubscribeUrl` | One-click unsubscribe link |
+
+## Events
+
+The email channel emits events that feed back into the execution context:
+
+| Event | Trigger | Typical Delay |
+|-------|---------|---------------|
+| `email.delivered` | SMTP accepted | Immediate |
+| `email.bounced` | Hard/soft bounce | Seconds to minutes |
+| `email.opened` | Tracking pixel loaded | Minutes to days |
+| `email.clicked` | Tracked link clicked | Minutes to days |
+| `email.replied` | Reply received (via webhook) | Minutes to days |
+| `email.unsubscribed` | Unsubscribe link clicked | Immediate |
+
+These events are ingested into the ordered event queue and become available to subsequent branch steps.
+
+## Deliverability
+
+The engine enforces deliverability best practices:
+
+- **Rate limiting** — Respects per-domain send limits to avoid throttling
+- **Warm-up** — Gradually increases send volume for new domains/IPs
+- **Bounce handling** — Automatically pauses runs for hard-bounced contacts
+- **Unsubscribe** — Stops all runs for a contact when they unsubscribe
+- **Suppression list** — Global suppression list checked before every send
+
+## Error Handling
+
+| Error | Behavior |
+|-------|----------|
+| SMTP connection failure | Retry with exponential backoff (max 3 attempts) |
+| Rate limit (429) | Pause and retry on next tick |
+| Hard bounce | Mark contact as undeliverable, end run |
+| Soft bounce | Retry up to 3 times over 24 hours |
+| Template render error | Fail step, log error with context |

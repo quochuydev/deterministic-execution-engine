@@ -1,0 +1,72 @@
+---
+title: Installation
+description: Set up the Deterministic Execution Engine in your environment.
+icon: Download
+---
+
+## Prerequisites
+
+- Node.js 20+ or Bun 1.0+
+- PostgreSQL 15+ (for execution log persistence)
+- Redis 7+ (for scheduler state and distributed locking)
+
+## Install
+
+```bash
+npm install @dee/engine @dee/channels-email @dee/channels-voice
+```
+
+## Environment Configuration
+
+Create a `.env` file:
+
+```bash
+# Database - stores execution plans, logs, and contact state
+DATABASE_URL=postgresql://user:pass@localhost:5432/dee
+
+# Redis - scheduler state, distributed locks, event bus
+REDIS_URL=redis://localhost:6379
+
+# Email channel
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=outbound@example.com
+SMTP_PASS=your-smtp-password
+
+# Voice channel
+VOIP_PROVIDER=twilio
+TWILIO_ACCOUNT_SID=your-account-sid
+TWILIO_AUTH_TOKEN=your-auth-token
+TWILIO_FROM_NUMBER=+15551234567
+
+# Engine settings
+DEE_LOG_LEVEL=info
+DEE_SCHEDULER_TICK_MS=1000
+DEE_MAX_CONCURRENT_EXECUTIONS=100
+```
+
+## Database Setup
+
+Run migrations to create the required tables:
+
+```bash
+npx dee migrate
+```
+
+This creates:
+- `execution_plans` — Plan definitions (steps, transitions, conditions)
+- `execution_runs` — Active and completed run instances
+- `execution_logs` — Append-only log of every state transition
+- `contacts` — Contact records and channel-specific metadata
+- `channel_events` — Delivery receipts, open tracking, call outcomes
+
+## Verify
+
+```bash
+npx dee health
+# ✓ Database connected
+# ✓ Redis connected
+# ✓ SMTP reachable
+# ✓ VoIP provider authenticated
+# ✓ Engine ready
+```

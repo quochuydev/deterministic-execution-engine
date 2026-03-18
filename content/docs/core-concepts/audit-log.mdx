@@ -1,0 +1,111 @@
+---
+title: Audit Log
+description: The append-only execution log that makes every action traceable and verifiable.
+icon: Shield
+---
+
+## Overview
+
+Every action the engine takes is recorded in an **append-only audit log**. This log is the authoritative record of what happened, when, and why. It cannot be modified or deleted — only appended to.
+
+## Log Entry Structure
+
+```typescript
+interface AuditLogEntry {
+  id: string;              // unique entry ID (ULID)
+  runId: string;           // execution run this belongs to
+  planId: string;          // plan being executed
+  stepId: string;          // step that produced this entry
+  tick: number;            // logical clock tick
+  timestamp: Date;         // wall-clock time (informational only)
+  action: ActionType;      // what happened
+  input: object;           // snapshot of inputs to the step
+  output: object;          // result of the step
+  context: object;         // execution context at time of action
+  checksum: string;        // SHA-256 hash of the entry contents
+  previousChecksum: string; // hash of the previous entry (chain integrity)
+}
+```
+
+## Action Types
+
+| Action | Description |
+|--------|-------------|
+| `run.started` | Execution run initiated |
+| `run.completed` | All steps finished |
+| `run.failed` | Unrecoverable failure |
+| `step.entered` | Scheduler advanced to a new step |
+| `step.evaluated` | Branch condition evaluated |
+| `step.executed` | Action performed (email sent, call initiated) |
+| `step.skipped` | Step skipped due to condition |
+| `wait.started` | Wait step began |
+| `wait.completed` | Wait duration elapsed |
+| `event.received` | External event ingested (open, reply, bounce) |
+| `error.occurred` | Error during step execution |
+| `error.retried` | Step retried after transient failure |
+
+## Hash Chain
+
+Each log entry includes the checksum of the previous entry, forming a **hash chain**. This makes tampering detectable — modifying any entry breaks the chain for all subsequent entries.
+
+```
+Entry 1: checksum=abc123, prev=000000
+Entry 2: checksum=def456, prev=abc123
+Entry 3: checksum=ghi789, prev=def456
+```
+
+Verify chain integrity:
+
+```typescript
+const valid = await engine.verifyAuditChain(runId);
+// { valid: true, entries: 47, firstTick: 0, lastTick: 892 }
+```
+
+## Querying the Log
+
+```typescript
+// All entries for a run
+const entries = await engine.audit.getByRun('run_abc123');
+
+// Filter by action type
+const sends = await engine.audit.query({
+  runId: 'run_abc123',
+  actions: ['step.executed'],
+});
+
+// Get the full context at a specific step
+const snapshot = await engine.audit.getContextAt('run_abc123', 'step_welcome-email');
+```
+
+## Compliance and Export
+
+Export audit logs for regulatory compliance:
+
+```typescript
+// Export as structured JSON
+await engine.audit.export('run_abc123', {
+  format: 'json',
+  output: './audit/run_abc123.json',
+});
+
+// Export as PDF report
+await engine.audit.export('run_abc123', {
+  format: 'pdf',
+  output: './audit/run_abc123.pdf',
+  includeTemplates: true,
+  includeEventTimeline: true,
+});
+```
+
+## Retention
+
+Audit logs are retained indefinitely by default. Configure retention policies for storage management:
+
+```typescript
+const engine = new Engine({
+  audit: {
+    retention: { days: 2555 }, // ~7 years
+    archiveTo: 's3://dee-audit-archive/',
+  },
+});
+```
